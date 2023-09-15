@@ -98,9 +98,9 @@ struct fsverity_operations {
 	 * Write a Merkle tree block to the given inode.
 	 *
 	 * @inode: the inode for which the Merkle tree is being built
-	 * @buf: block to write
-	 * @index: 0-based index of the block within the Merkle tree
-	 * @log_blocksize: log base 2 of the Merkle tree block size
+	 * @buf: the Merkle tree block to write
+	 * @pos: the position of the block in the Merkle tree (in bytes)
+	 * @size: the Merkle tree block size (in bytes)
 	 *
 	 * This is only called between ->begin_enable_verity() and
 	 * ->end_enable_verity().
@@ -108,15 +108,20 @@ struct fsverity_operations {
 	 * Return: 0 on success, -errno on failure
 	 */
 	int (*write_merkle_tree_block)(struct inode *inode, const void *buf,
-				       u64 index, int log_blocksize);
+				       u64 pos, unsigned int size);
 };
 
 #ifdef CONFIG_FS_VERITY
 
 static inline struct fsverity_info *fsverity_get_info(const struct inode *inode)
 {
-	/* pairs with the cmpxchg() in fsverity_set_info() */
-	return READ_ONCE(inode->i_verity_info);
+	/*
+	 * Pairs with the cmpxchg_release() in fsverity_set_info().
+	 * I.e., another task may publish ->i_verity_info concurrently,
+	 * executing a RELEASE barrier.  We need to use smp_load_acquire() here
+	 * to safely ACQUIRE the memory the other task published.
+	 */
+	return smp_load_acquire(&inode->i_verity_info);
 }
 
 /* enable.c */
@@ -132,6 +137,10 @@ int fsverity_ioctl_measure(struct file *filp, void __user *arg);
 int fsverity_file_open(struct inode *inode, struct file *filp);
 int fsverity_prepare_setattr(struct dentry *dentry, struct iattr *attr);
 void fsverity_cleanup_inode(struct inode *inode);
+
+/* read_metadata.c */
+
+int fsverity_ioctl_read_metadata(struct file *filp, const void __user *uarg);
 
 /* verify.c */
 
@@ -176,6 +185,14 @@ static inline int fsverity_prepare_setattr(struct dentry *dentry,
 
 static inline void fsverity_cleanup_inode(struct inode *inode)
 {
+}
+
+/* read_metadata.c */
+
+static inline int fsverity_ioctl_read_metadata(struct file *filp,
+					       const void __user *uarg)
+{
+	return -EOPNOTSUPP;
 }
 
 /* verify.c */
